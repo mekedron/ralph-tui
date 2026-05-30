@@ -231,6 +231,20 @@ export interface RuntimeOptions {
 
   /** Enable parallel execution, optionally with worker count (--parallel [N]) */
   parallel?: number | boolean;
+
+  /**
+   * Auto-start execution when a new task appears while the instance is stopped
+   * (but not paused). When this CLI flag is set, it overrides the stored
+   * `StoredConfig.watch` value.
+   */
+  watch?: boolean;
+
+  /**
+   * Interval in seconds between automatic task-list refreshes (equivalent to
+   * pressing `r` in the TUI). `0` disables polling. When this CLI flag is set,
+   * it overrides the stored `StoredConfig.pollIntervalSeconds` value.
+   */
+  pollIntervalSeconds?: number;
 }
 
 /**

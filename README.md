@@ -123,7 +123,36 @@ ralph-tui run --sandbox
 
 # Use a bundled color theme by name
 ralph-tui run --theme dracula
+
+# Continuous mode: auto-refresh every 30s and auto-start on new tasks
+ralph-tui run --watch --poll 30
 ```
+
+### Continuous Mode
+
+Run Ralph 24/7 against an active tracker and let it pick up new work as it
+appears, without needing a human in the loop:
+
+| Option | Description |
+|--------|-------------|
+| `--watch` | Auto-start execution when a new actionable task appears while the instance is stopped (not paused). Has no effect while Ralph is already running, paused, or in an error state. |
+| `--poll <seconds>` | Re-fetch the task list every N seconds (1–3600). `0` disables polling. Equivalent to pressing `r` in the TUI. |
+
+Both are CLI-only flags — they intentionally do not appear in the in-TUI
+settings menu and are not persisted to `.ralph-tui/config.toml`. Pass them
+on every invocation when you want continuous-mode behavior (a shell alias
+or a systemd/launchd unit is the natural place to bake them in):
+
+```bash
+# Connect to your tracker once and let Ralph pick up new tasks as they appear.
+ralph-tui run --watch --poll 30 --epic prod-backlog
+```
+
+Auto-start respects iteration limits — if a refresh discovers new work after
+the iteration counter is exhausted, Ralph adds one iteration and continues
+(same behavior as pressing `s` from a stopped state). Auto-start is suppressed
+for remote tabs to avoid driving execution across machines without explicit
+control; the polling refresh, however, applies to any tab.
 
 ### Create PRD Options
 

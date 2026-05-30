@@ -13,6 +13,7 @@ import { colors, layout } from '../theme.js';
 import type { RalphStatus, TaskStatus } from '../theme.js';
 import type { TaskItem, BlockerInfo, DetailsViewMode, IterationTimingInfo, SubagentTreeNode } from '../types.js';
 import { preserveCurrentSessionCompletions } from '../task-state.js';
+import { diffActionableTaskIds, shouldAutoStartOnRefresh } from '../watch-auto-start.js';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
@@ -231,6 +232,18 @@ export interface RunAppProps {
   parallelRefreshedTasks?: TrackerTask[];
   /** Callback to manually refresh tasks in parallel mode (for 'r' key when no engine) */
   onRefreshTasks?: () => void;
+  /**
+   * CLI override for the --watch flag. When `true`, the TUI auto-starts execution
+   * after a refresh that reveals a new actionable task and the engine is in a
+   * stopped-but-not-paused state. Falls back to `storedConfig.watch`.
+   */
+  watch?: boolean;
+  /**
+   * CLI override for the --poll <seconds> flag. When > 0, the TUI runs the
+   * refresh code path (equivalent to pressing `r`) every N seconds. Falls back
+   * to `storedConfig.pollIntervalSeconds`. `0` disables polling.
+   */
+  pollIntervalSeconds?: number;
 }
 
 /**
@@ -599,6 +612,8 @@ export function RunApp({
   onConflictSkip,
   parallelRefreshedTasks,
   onRefreshTasks,
+  watch: watchProp,
+  pollIntervalSeconds: pollIntervalSecondsProp,
 }: RunAppProps): ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
@@ -656,6 +671,33 @@ export function RunApp({
     })
   );
   const currentTaskIdRef = useRef<string | undefined>(undefined);
+  // Tracks the set of actionable (open/in_progress) task IDs we last saw so the
+  // --watch handler can decide whether a refresh revealed a *new* task. Seeded
+  // from `initialTasks` so first-render refreshes are scored against startup.
+  const prevActionableTaskIdsRef = useRef<Set<string>>(
+    new Set(
+      (initialTasks ?? [])
+        .filter((t) => t.status === 'open' || t.status === 'in_progress')
+        .map((t) => t.id)
+    )
+  );
+  // Effective watch/poll values: CLI flag only; default off.
+  // These are intentionally not persisted to StoredConfig — they must be passed
+  // explicitly via --watch and --poll every run. Keeping them out of the
+  // settings menu avoids the CLI-vs-stored display/precedence ambiguity that
+  // affects other CLI-overridable fields.
+  const effectiveWatch = watchProp ?? false;
+  const effectivePollIntervalSeconds = pollIntervalSecondsProp ?? 0;
+  // Ref mirror of the watch-relevant runtime state. The engine event listener
+  // closure is keyed on [engine] (re-subscribing on each event/state change
+  // would be wasteful), so it must read these via ref to avoid stale captures.
+  const autoStartCtxRef = useRef({
+    status: 'ready' as RalphStatus,
+    effectiveWatch,
+    currentIteration: 0,
+    maxIterations: 0,
+    isViewingRemote: false,
+  });
   const localContextWindowRef = useRef<number | undefined>(undefined);
   const [localContextWindow, setLocalContextWindow] = useState<number | undefined>(undefined);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -2016,7 +2058,7 @@ export function RunApp({
           }
           break;
 
-        case 'tasks:refreshed':
+        case 'tasks:refreshed': {
           // Update task list with fresh data from tracker
           setTasks((prev) =>
             preserveCurrentSessionCompletions(
@@ -2024,7 +2066,37 @@ export function RunApp({
               convertTasksWithDependencyStatus(event.tasks)
             )
           );
+          // --watch: if a refresh revealed a new actionable task and the
+          // engine is currently stopped-but-not-paused, auto-start using the
+          // same logic as the 's' key. Read current values via the ref so we
+          // don't suffer from stale closure (the listener is keyed on [engine]).
+          const ctx = autoStartCtxRef.current;
+          const { actionableIds, hasNew } = diffActionableTaskIds(
+            prevActionableTaskIdsRef.current,
+            event.tasks
+          );
+          prevActionableTaskIdsRef.current = actionableIds;
+          if (
+            shouldAutoStartOnRefresh(ctx.status, ctx.effectiveWatch, hasNew) &&
+            engine &&
+            !ctx.isViewingRemote
+          ) {
+            if (ctx.currentIteration >= ctx.maxIterations) {
+              engine.addIterations(1).then((shouldContinue) => {
+                if (shouldContinue) {
+                  setStatus('running');
+                  engine.continueExecution();
+                }
+              }).catch(() => {
+                // Best-effort; ignore failures (e.g. concurrent state changes).
+              });
+            } else {
+              setStatus('running');
+              engine.continueExecution();
+            }
+          }
           break;
+        }
 
         case 'engine:iterations-added':
           // Update maxIterations state when iterations are added at runtime
@@ -2054,6 +2126,35 @@ export function RunApp({
     }, 1000);
     return () => clearInterval(interval);
   }, [status]);
+
+  // --poll: periodically refresh the task list (equivalent to pressing 'r').
+  // Routes to the same code path as the manual refresh: remote command when
+  // viewing a remote tab, engine.refreshTasks() for local sequential mode, or
+  // the parallel-mode onRefreshTasks callback when there is no engine.
+  useEffect(() => {
+    if (!effectivePollIntervalSeconds || effectivePollIntervalSeconds <= 0) {
+      return;
+    }
+    const intervalMs = effectivePollIntervalSeconds * 1000;
+    const interval = setInterval(() => {
+      if (isViewingRemote && instanceManager) {
+        instanceManager.sendRemoteCommand('refreshTasks');
+      } else if (engine) {
+        engine.refreshTasks().catch(() => {
+          // Refresh is best-effort; failures shouldn't crash the TUI.
+        });
+      } else if (onRefreshTasks) {
+        onRefreshTasks();
+      }
+    }, intervalMs);
+    return () => clearInterval(interval);
+  }, [
+    effectivePollIntervalSeconds,
+    engine,
+    onRefreshTasks,
+    isViewingRemote,
+    instanceManager,
+  ]);
 
   // Get initial state from engine (engine is absent in parallel mode)
   useEffect(() => {
@@ -2110,6 +2211,34 @@ export function RunApp({
   useEffect(() => {
     remoteCurrentTaskIdRef.current = remoteCurrentTaskId;
   }, [remoteCurrentTaskId]);
+
+  // Sync watch-relevant runtime state into the ref used by the engine event
+  // listener (which is keyed on [engine] and would otherwise capture stale values).
+  useEffect(() => {
+    autoStartCtxRef.current = {
+      status,
+      effectiveWatch,
+      currentIteration,
+      maxIterations,
+      isViewingRemote,
+    };
+  }, [status, effectiveWatch, currentIteration, maxIterations, isViewingRemote]);
+
+  // Parallel mode: when refreshed tasks arrive (via parallelRefreshedTasks prop)
+  // and the run is stopped-but-not-paused with --watch enabled, restart the
+  // executor. Mirrors the 's' key handler for parallel mode.
+  useEffect(() => {
+    if (!parallelRefreshedTasks || !isParallelMode || !onParallelStart) return;
+    const { actionableIds, hasNew } = diffActionableTaskIds(
+      prevActionableTaskIdsRef.current,
+      parallelRefreshedTasks
+    );
+    prevActionableTaskIdsRef.current = actionableIds;
+    if (shouldAutoStartOnRefresh(status, effectiveWatch, hasNew)) {
+      setStatus('running');
+      onParallelStart();
+    }
+  }, [parallelRefreshedTasks, isParallelMode, onParallelStart, status, effectiveWatch]);
 
   // Sync task selection → agent tree selection
   // When currentTaskId changes, reset tree selection to the task root

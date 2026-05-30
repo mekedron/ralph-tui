@@ -92,6 +92,8 @@ Run Options:
   --sandbox=sandbox-exec  Force sandbox-exec (macOS)
   --no-sandbox        Disable sandboxing
   --no-network        Disable network access in sandbox
+  --watch             Auto-start when a new task appears (and instance is stopped)
+  --poll <seconds>    Auto-refresh task list every N seconds (0 = disabled)
   --listen            Enable remote listener (WebSocket server)
   --listen-port <n>   Port for remote listener (default: 7890)
   --rotate-token      Rotate server token before starting listener

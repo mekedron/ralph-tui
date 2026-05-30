@@ -1145,6 +1145,20 @@ export function parseRunArgs(args: string[]): ExtendedRuntimeOptions {
         }
         break;
 
+      case '--watch':
+        options.watch = true;
+        break;
+
+      case '--poll':
+        if (nextArg && !nextArg.startsWith('-')) {
+          const parsed = parseInt(nextArg, 10);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 3600) {
+            options.pollIntervalSeconds = parsed;
+            i++;
+          }
+        }
+        break;
+
       case '--task-range':
         // Allow nextArg if it exists and either doesn't start with '-' OR matches a negative-integer pattern (e.g., "-10")
         if (nextArg && (!nextArg.startsWith('-') || /^-\d+$/.test(nextArg))) {
@@ -1229,6 +1243,10 @@ Options:
   --direct-merge      Merge directly to current branch (skip session branch creation)
   --target-branch <name> Create/use explicit session branch name for parallel mode
   --task-range <range> Filter tasks by index (e.g., 1-5, 3-, -10)
+  --watch             Auto-start execution when a new task appears while the
+                      instance is stopped (but not paused)
+  --poll <seconds>    Interval in seconds between automatic task-list refreshes
+                      (0 = disabled, max 3600). Equivalent to pressing 'r'.
   --listen            Enable remote listener (implies --headless)
   --listen-port <n>   Port for remote listener (default: 7890)
   --rotate-token      Rotate server token before starting listener
@@ -1262,6 +1280,7 @@ Examples:
   ralph-tui run --no-tui                     # Run headless for CI/scripts
   ralph-tui run --listen --prd ./prd.json    # Run with remote listener enabled
   ralph-tui run --remote-only                # TUI-only client for configured remotes
+  ralph-tui run --watch --poll 30            # Auto-refresh every 30s and auto-start on new tasks
 `);
 }
 
@@ -1809,6 +1828,10 @@ interface RunAppWrapperProps {
   onRefreshTasks?: () => void;
   /** When true, the InstanceManager skips the local tab (remote-only mode). */
   remoteOnly?: boolean;
+  /** CLI override for the --watch flag (auto-start on new tasks). */
+  watch?: boolean;
+  /** CLI override for the --poll <seconds> flag (auto-refresh interval). */
+  pollIntervalSeconds?: number;
 }
 
 /**
@@ -1868,6 +1891,8 @@ function RunAppWrapper({
   parallelRefreshedTasks,
   onRefreshTasks,
   remoteOnly = false,
+  watch: watchOverride,
+  pollIntervalSeconds: pollIntervalSecondsOverride,
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
   const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
@@ -2098,6 +2123,8 @@ function RunAppWrapper({
       onConflictSkip={onConflictSkip}
       parallelRefreshedTasks={parallelRefreshedTasks}
       onRefreshTasks={onRefreshTasks}
+      watch={watchOverride}
+      pollIntervalSeconds={pollIntervalSecondsOverride}
     />
   );
 }
@@ -2130,7 +2157,9 @@ async function runWithTui(
   initialTasks: TrackerTask[],
   storedConfig?: StoredConfig,
   notificationOptions?: NotificationRunOptions,
-  executionScopes: ExecutionScope[] = []
+  executionScopes: ExecutionScope[] = [],
+  watchOverride?: boolean,
+  pollIntervalSecondsOverride?: number,
 ): Promise<PersistedSessionState> {
   let currentState = persistedState;
   // Track when engine starts for duration calculation
@@ -2383,6 +2412,8 @@ async function runWithTui(
       sandboxConfig={config.sandbox}
       resolvedSandboxMode={resolvedSandboxMode}
       initialShowEpicLoader={config.tracker.plugin === 'json' && !config.prdPath}
+      watch={watchOverride}
+      pollIntervalSeconds={pollIntervalSecondsOverride}
     />
   );
 
@@ -2542,6 +2573,8 @@ async function runParallelWithTui(
   storedConfig?: StoredConfig,
   tracker?: TrackerPlugin,
   executionScopes: ExecutionScope[] = [],
+  watchOverride?: boolean,
+  pollIntervalSecondsOverride?: number,
 ): Promise<ParallelTuiRunResult> {
   let currentState = persistedState;
   let resolveQuitPromise: (() => void) | null = null;
@@ -3111,6 +3144,8 @@ async function runParallelWithTui(
             refreshTimer
           );
         }}
+        watch={watchOverride}
+        pollIntervalSeconds={pollIntervalSecondsOverride}
       />
     );
   }
@@ -4154,7 +4189,9 @@ export async function executeRunCommand(args: string[]): Promise<void> {
           directMerge,
           storedConfig,
           tracker,
-          executionScopes
+          executionScopes,
+          options.watch,
+          options.pollIntervalSeconds,
         );
         persistedState = parallelTuiResult.state;
         parallelSummaryForGuidance = parallelTuiResult.summary;
@@ -4419,7 +4456,9 @@ export async function executeRunCommand(args: string[]): Promise<void> {
         tasks,
         storedConfig,
         notificationRunOptions,
-        executionScopes
+        executionScopes,
+        options.watch,
+        options.pollIntervalSeconds,
       );
     } else {
       // Sequential headless mode (existing path)

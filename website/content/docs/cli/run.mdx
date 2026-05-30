@@ -59,6 +59,17 @@ Running `ralph-tui` without any command also starts the TUI interface, allowing 
 | `--no-setup` | Skip interactive setup even if no config exists |
 | `--remote-only` | Start the TUI as a pure remote client — no local engine, no local tab. See [Remote-Only Mode](#remote-only-mode). |
 
+### Continuous Mode
+
+| Option | Description |
+|--------|-------------|
+| `--watch` | Auto-start execution when a new actionable task appears while the instance is stopped (not paused). |
+| `--poll <seconds>` | Re-fetch the task list every N seconds (1–3600). `0` disables polling. Equivalent to pressing `r` in the TUI. |
+
+Both are CLI-only flags. They do not appear in the in-TUI settings menu
+and are not persisted to `.ralph-tui/config.toml` — pass them on every
+invocation when you want continuous-mode behavior.
+
 ## Model Options
 
 The `--model` flag accepts different values depending on which agent you're using.
@@ -184,6 +195,31 @@ ralph-tui run --prd ./prd.json --delay 5000
 # Custom output directory for logs
 ralph-tui run --prd ./prd.json --output-dir ./logs/ralph
 ```
+
+### Continuous (Watch) Mode
+
+Keep Ralph running 24/7 against an active tracker and let it pick up new
+tasks automatically:
+
+```bash
+# Re-check the tracker every 30s; auto-start when a new task appears.
+ralph-tui run --watch --poll 30 --epic prod-backlog
+```
+
+`--poll` triggers the same refresh as pressing `r` in the TUI. `--watch`
+fires the same start-or-continue logic as pressing `s` — but only when the
+engine is in a stopped-but-not-paused state (`stopped`, `idle`, `complete`)
+and the refresh revealed a new actionable task. Both flags are CLI-only:
+they do not appear in the in-TUI settings menu and are not persisted to
+`.ralph-tui/config.toml`. Wrap your launch in a shell alias or a
+systemd/launchd unit if you want the same flags on every run.
+
+<Callout type="info">
+Auto-start does not fire while Ralph is paused, executing, or in an
+`error` state. It is also suppressed for remote tabs — auto-driving
+execution across machines without explicit per-instance control is
+intentionally out of scope.
+</Callout>
 
 ## Execution Flow
 

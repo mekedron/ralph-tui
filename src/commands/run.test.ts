@@ -477,6 +477,67 @@ describe('parseRunArgs', () => {
       expect(result.headless).toBe(true);
     });
   });
+
+  describe('--watch parsing', () => {
+    test('parses --watch flag', () => {
+      const result = parseRunArgs(['--watch']);
+      expect(result.watch).toBe(true);
+    });
+
+    test('--watch defaults to undefined when not present', () => {
+      const result = parseRunArgs([]);
+      expect(result.watch).toBeUndefined();
+    });
+  });
+
+  describe('--poll parsing', () => {
+    test('parses --poll with positive seconds', () => {
+      const result = parseRunArgs(['--poll', '30']);
+      expect(result.pollIntervalSeconds).toBe(30);
+    });
+
+    test('parses --poll 0 as explicit disable override', () => {
+      const result = parseRunArgs(['--poll', '0']);
+      expect(result.pollIntervalSeconds).toBe(0);
+    });
+
+    test('accepts the maximum of 3600', () => {
+      const result = parseRunArgs(['--poll', '3600']);
+      expect(result.pollIntervalSeconds).toBe(3600);
+    });
+
+    test('ignores --poll above the maximum', () => {
+      const result = parseRunArgs(['--poll', '4000']);
+      expect(result.pollIntervalSeconds).toBeUndefined();
+    });
+
+    test('ignores --poll without a value', () => {
+      const result = parseRunArgs(['--poll']);
+      expect(result.pollIntervalSeconds).toBeUndefined();
+    });
+
+    test('ignores --poll with non-numeric value', () => {
+      const result = parseRunArgs(['--poll', 'abc']);
+      expect(result.pollIntervalSeconds).toBeUndefined();
+    });
+
+    test('ignores --poll with negative value (next arg starts with dash)', () => {
+      const result = parseRunArgs(['--poll', '-5']);
+      expect(result.pollIntervalSeconds).toBeUndefined();
+    });
+
+    test('does not consume the next flag when --poll is missing a value', () => {
+      const result = parseRunArgs(['--poll', '--headless']);
+      expect(result.pollIntervalSeconds).toBeUndefined();
+      expect(result.headless).toBe(true);
+    });
+
+    test('parses --watch and --poll together', () => {
+      const result = parseRunArgs(['--watch', '--poll', '15']);
+      expect(result.watch).toBe(true);
+      expect(result.pollIntervalSeconds).toBe(15);
+    });
+  });
 });
 
 describe('printRunHelp', () => {
